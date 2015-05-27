@@ -3,6 +3,7 @@
 */
 #include <assert.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,9 @@
 #include <linux/limits.h>
 #include <sys/un.h>
 #include <sys/socket.h>
+
+#define FALSE 0
+#define TRUE !FALSE
 
 #define SOFTWARE_VERSION 0.01
 
@@ -29,21 +33,5 @@ enum BINARY_MODE {
 
 
 static void usage(const char *);
-
-
-
-static void usage(const char *binaryname)
-{
-  fprintf(stderr,
-    "Usage: %s [<options>]\n\n"
-    "Options:\n"
-    "\t-c         console mode\n"
-    "\t-d         enable debug mode\n"
-    "\t-h         usage help\n"
-    "\t-t <num>   timeout in seconds ( non-console mode only )\n"
-    "\t-s <path>  path to server socket file\n"
-    "\t-v         version\n"
-    "\n",
-    binaryname
-  );
-}
+static void *socketReader( void * );
+static void *socketWriter( void * );

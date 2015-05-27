@@ -55,14 +55,13 @@ main(int argc, char *argv[])
 
         /* Transfer data from connected socket to stdout until EOF */
 
-        while( ( numRead = read( cfd, buf, LINE_BUFFER_SIZE ) ) > 0 ){
-          if( write( STDOUT_FILENO, buf, numRead ) != numRead ){
+        while( ( numRead = read( cfd, buf, BUF_SIZE ) ) > 0){
+          if( write(STDOUT_FILENO, buf, numRead ) != numRead ){
               perror( "write" );
               exit( EXIT_FAILURE );
-              
-            }else{
-              write(cfd, buf, numRead);
             }
+            
+            write( cfd, buf, numRead );
         }
 
         if (numRead == -1){

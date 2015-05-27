@@ -3,19 +3,26 @@
 */
 #include "mscangtwyd_cli.h"
 
+
+
+int sfd;
+
+
+
 int main( int argc, char *argv[] ){
   
   struct sockaddr_un addr;
-  int optchar, debug, sfd;
+  int optchar, debug;
   ssize_t numRead;
   char buf[BUF_SIZE], sockPathBuffer[ PATH_MAX ];
   enum BINARY_MODE clientMode = COMMANDLINE;
+  pthread_t THreaderSocket, THwriterSocket;
   
   memset( sockPathBuffer, NUL_BYTE, sizeof( sockPathBuffer ) );
   strncpy( sockPathBuffer, MSCANGTWYD_UXDOSOCK_PATH, sizeof( MSCANGTWYD_UXDOSOCK_PATH ) );
     
     /* command line args parsing - getopt */
-  while( ( optchar = getopt(argc, argv, "chds:t:v" ) ) != -1 ){
+  while( ( optchar = getopt( argc, argv, "chds:t:v" ) ) != -1 ){
     switch( optchar ){
 
       /* console mode */
@@ -32,23 +39,27 @@ int main( int argc, char *argv[] ){
       /* debug mode */
       case 'd':
         debug = 1;
-        PRINT_DEBUG( "getopt: %c: %d\n", (char)optchar, debug );
+        PRINT_DEBUG( "getopt: %c: %d\n", ( char )optchar, debug );
         break;
       /* unix domain socket path */
       case 's':
-        PRINT_DEBUG( "getopt: %c: %s\n", (char)optchar, optarg );
+        PRINT_DEBUG( "getopt: %c: %s\n", ( char )optchar, optarg );
+        if( PATH_MAX < strlen( optarg ) ){
+          PRINT_DEBUG( "Path longer than %d\n", PATH_MAX );
+          exit( EXIT_FAILURE );
+        }
         memset( sockPathBuffer, NUL_BYTE, sizeof( sockPathBuffer ) );
         strncpy( sockPathBuffer, optarg, ( size_t )( PATH_MAX - 1 ) );
         PRINT_DEBUG( "%s\n", sockPathBuffer );
         break;
       /* timeout in seconds */ 
       case 't':
-        PRINT_DEBUG( "getopt: %c: %s\n", (char)optchar, optarg );
+        PRINT_DEBUG( "getopt: %c: %s\n", ( char )optchar, optarg );
         fprintf( stderr, "timeout option unimplemented\n" );
         exit( EXIT_FAILURE );
         break;
       case 'v':
-        PRINT_DEBUG( "getopt: %c: %s\n", (char)optchar, optarg );
+        PRINT_DEBUG( "getopt: %c: %s\n", ( char )optchar, optarg );
         fprintf( stderr, "%s %.2f\n", argv[0], SOFTWARE_VERSION );
         exit( EXIT_SUCCESS );
         break;
@@ -88,25 +99,110 @@ int main( int argc, char *argv[] ){
     exit( EXIT_FAILURE );
 
   }
+  
+  pthread_create( &THwriterSocket, NULL, &socketWriter, NULL);
+  pthread_create( &THreaderSocket, NULL, &socketReader, NULL);
 
-  /* Copy stdin to socket */
-
-  while ((numRead = read(STDIN_FILENO, buf, BUF_SIZE)) > 0){
-    if (write(sfd, buf, numRead) != numRead){
-
-      PRINT_DEBUG("partial/failed write");
-
-    }
-
+  if( CONSOLE == clientMode ){
+    
+    pthread_join( THwriterSocket, NULL);
+    
+    pthread_cancel( THreaderSocket );
+  
+    pthread_join( THreaderSocket, NULL);
+    
   }
-
-  if( -1 == numRead ){
-
-    perror( "read" );
-    exit( EXIT_FAILURE );
-
-  }
-
-  exit( EXIT_SUCCESS );         /* Closes our socket; server sees EOF */
+  
+  close( sfd );
+  
+  /* Closes our socket; server sees EOF */
+  exit( EXIT_SUCCESS );
 
 }
+
+
+
+static void usage(const char *binaryname)
+{
+  fprintf(stderr,
+    "Usage: %s [<options>]\n\n"
+    "Options:\n"
+    "\t-c         console mode\n"
+    "\t-d         enable debug mode\n"
+    "\t-h         usage help\n"
+    "\t-t <num>   timeout in seconds ( non-console mode only )\n"
+    "\t-s <path>  path to server socket file\n"
+    "\t-v         version\n"
+    "\n",
+    binaryname
+  );
+}
+
+
+
+static void *socketReader( void *sockReadArg ){
+  
+  ssize_t bytesRead;
+  char readBuffer[ LINE_BUFFER_SIZE ];
+  
+  memset( readBuffer, NUL_BYTE, sizeof( readBuffer ) );
+  
+  while( ( bytesRead = read( sfd, readBuffer, LINE_BUFFER_SIZE ) ) > 0 ){
+    if( write( STDOUT_FILENO, readBuffer, bytesRead ) != bytesRead ){
+      perror( "write" );
+      return ( void * )EXIT_FAILURE;
+    }
+    
+    memset( readBuffer, NUL_BYTE, sizeof( readBuffer ) );
+  }
+  
+  return ( void * )EXIT_SUCCESS;
+}
+
+
+
+static void *socketWriter( void *sockWriteArg ){
+  
+  char *line;
+  size_t len = ( size_t )LINE_BUFFER_SIZE;
+  ssize_t bytesRead, bytesWrote;
+  
+  line = ( char * )malloc( ( size_t )( LINE_BUFFER_SIZE * sizeof( char ) ) );
+  if( NULL == line ){
+    perror( "malloc" );
+    return ( void * )EXIT_FAILURE;
+  }
+  
+  assert( NULL != line );
+
+  printf( "Type 'exit' to quit.\n" );
+  while( -1 != ( bytesRead = getline( &line, &len, stdin ) ) ){
+    
+    if( 0 == strncmp( line, "exit", (  sizeof( "exit" ) - sizeof( NUL_BYTE ) ) ) ){
+      
+      break;
+    }
+    
+    printf("Retrieved line of length %zu :\n", bytesRead );
+    printf("%s", line);
+    if( -1 == ( bytesWrote = write( sfd, line, bytesRead ) ) ){
+      
+      perror( "write" );
+      PRINT_DEBUG( "Error while writing to socket.\n" );
+    }
+    
+    if( bytesWrote < bytesRead ){
+      
+      PRINT_DEBUG( "Partial or incomplete write to socket.\n" );
+    }
+    
+    memset( line, NUL_BYTE, sizeof( line ) );
+  }
+
+  free( line );
+  return ( void * )EXIT_SUCCESS;
+  
+}
+
+
+
