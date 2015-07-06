@@ -13,6 +13,7 @@ int main( int argc, char *argv[] ){
   
   struct sockaddr_un addr;
   int optchar, debug;
+  unsigned int timeout = 0;
   ssize_t numRead;
   char buf[BUF_SIZE], sockPathBuffer[ PATH_MAX ];
   enum BINARY_MODE clientMode = COMMANDLINE;
@@ -22,70 +23,102 @@ int main( int argc, char *argv[] ){
   strncpy( sockPathBuffer, MSCANGTWYD_UXDOSOCK_PATH, sizeof( MSCANGTWYD_UXDOSOCK_PATH ) );
     
     /* command line args parsing - getopt */
-  while( ( optchar = getopt( argc, argv, "chds:t:v" ) ) != -1 ){
+  while( ( optchar = getopt( argc, argv, "chs:t:v" ) ) != -1 ){
     switch( optchar ){
-
+      
       /* console mode */
       case 'c':
         PRINT_DEBUG( "getopt: %c\n", optchar );
         clientMode = CONSOLE;
         break;
+        
       /* show help or usage */
       case 'h':
         PRINT_DEBUG( "getopt: %c\n", optchar );
         usage( argv[0] );
         exit( EXIT_FAILURE );
         break;
-      /* debug mode */
-      case 'd':
-        debug = 1;
-        PRINT_DEBUG( "getopt: %c: %d\n", ( char )optchar, debug );
-        break;
+        
       /* unix domain socket path */
       case 's':
         PRINT_DEBUG( "getopt: %c: %s\n", ( char )optchar, optarg );
         if( PATH_MAX < strlen( optarg ) ){
           PRINT_DEBUG( "Path longer than %d\n", PATH_MAX );
+          usage( argv[0] );
           exit( EXIT_FAILURE );
         }
         memset( sockPathBuffer, NUL_BYTE, sizeof( sockPathBuffer ) );
         strncpy( sockPathBuffer, optarg, ( size_t )( PATH_MAX - 1 ) );
         PRINT_DEBUG( "%s\n", sockPathBuffer );
         break;
+        
       /* timeout in seconds */ 
       case 't':
         PRINT_DEBUG( "getopt: %c: %s\n", ( char )optchar, optarg );
-        fprintf( stderr, "timeout option unimplemented\n" );
-        exit( EXIT_FAILURE );
+        timeout = atoi( optarg );
+        if( ( TIMEOUT_MAX < timeout ) || ( TIMEOUT_MIN > timeout ) ){
+          
+          fprintf( stderr, "Invaid timeout duration specified\n" );
+          usage( argv[0] );
+          exit( EXIT_FAILURE );
+        }
         break;
+        
       case 'v':
         PRINT_DEBUG( "getopt: %c: %s\n", ( char )optchar, optarg );
         fprintf( stderr, "%s %.2f\n", argv[0], SOFTWARE_VERSION );
         exit( EXIT_SUCCESS );
         break;
+        
       default:
         usage( argv[0] );
         exit( EXIT_FAILURE );
-
     }
-
   }
   
-  /* catch none or non-valid cmdline options */
-  if( ( 1 == argc ) || ( optind < argc ) ){
-
-    usage( argv[0] );
-    exit( EXIT_FAILURE );
-
+  /* catch none or non-valid cmdline options in console mode */
+  if( CONSOLE == clientMode ){
+    
+    PRINT_DEBUG( "optind: %d argc: %d\n", optind, argc );
+    if( ( 1 == argc ) || ( optind != argc ) ){
+      
+      usage( argv[0] );
+      exit( EXIT_FAILURE );
+    }
+    
+    if( 0 != timeout ){
+      
+      fprintf( stderr, "Timeout is an invalid option in console mode\n" );
+      usage( argv[0] );
+      exit( EXIT_FAILURE );
+    }
   }
+  
+  if( COMMANDLINE == clientMode ){
+    
+    PRINT_DEBUG( "optind: %d argc: %d\n", optind, argc );
+    if( ( 1 == argc ) || ( optind == argc ) ){
+      
+      usage( argv[0] );
+      exit( EXIT_FAILURE );
+    }
+    
+    if( 0 == timeout ){
+      
+      fprintf( stderr, "Timeout must be specified in command line mode\n" );
+      usage( argv[0] );
+      exit( EXIT_FAILURE );
+    }
+  }
+  
 
+  PRINT_DEBUG( "optind: %d argc: %d\n", optind, argc );
   /* Create client unix domain socket */
   sfd = socket(AF_UNIX, SOCK_STREAM, 0);
   if( -1 == sfd ){
-
+    
     perror("socket");
-      exit( EXIT_FAILURE );
-
+    exit( EXIT_FAILURE );
   }
       
   /* Construct server address, and make the connection */
@@ -94,10 +127,10 @@ int main( int argc, char *argv[] ){
   strncpy(addr.sun_path, MSCANGTWYD_UXDOSOCK_PATH, sizeof( addr.sun_path ) - 1 );
 
   if( connect( sfd, ( struct sockaddr * )&addr, sizeof( struct sockaddr_un ) ) == -1){
-
+    
     perror( "connect" );
     exit( EXIT_FAILURE );
-
+    
   }
   
   pthread_create( &THwriterSocket, NULL, &socketWriter, NULL);
@@ -108,7 +141,7 @@ int main( int argc, char *argv[] ){
     pthread_join( THwriterSocket, NULL);
     
     pthread_cancel( THreaderSocket );
-  
+   
     pthread_join( THreaderSocket, NULL);
     
   }
@@ -122,19 +155,21 @@ int main( int argc, char *argv[] ){
 
 
 
-static void usage(const char *binaryname)
-{
+static void usage( const char *binaryname ){
+  
   fprintf(stderr,
-    "Usage: %s [<options>]\n\n"
+    "Usage: %s [<options>] [<mscan-packets>]\n\n"
     "Options:\n"
     "\t-c         console mode\n"
-    "\t-d         enable debug mode\n"
+    "\t             -default: commmand line mode\n"
     "\t-h         usage help\n"
     "\t-t <num>   timeout in seconds ( non-console mode only )\n"
+    "\t             -duration: %d to %d seconds\n"
     "\t-s <path>  path to server socket file\n"
+    "\t             -max: %d characters\n"
     "\t-v         version\n"
     "\n",
-    binaryname
+    binaryname, TIMEOUT_MIN, TIMEOUT_MAX, PATH_MAX
   );
 }
 
@@ -142,21 +177,27 @@ static void usage(const char *binaryname)
 
 static void *socketReader( void *sockReadArg ){
   
-  ssize_t bytesRead;
   char readBuffer[ LINE_BUFFER_SIZE ];
+  int threadReturn = 0;
+  ssize_t bytesRead;
+
   
   memset( readBuffer, NUL_BYTE, sizeof( readBuffer ) );
   
   while( ( bytesRead = read( sfd, readBuffer, LINE_BUFFER_SIZE ) ) > 0 ){
-    if( write( STDOUT_FILENO, readBuffer, bytesRead ) != bytesRead ){
+    
+    if( bytesRead != write( STDOUT_FILENO, readBuffer, ( size_t )bytesRead ) ){
       perror( "write" );
-      return ( void * )EXIT_FAILURE;
+      
+      threadReturn = 1;
+      pthread_exit( &threadReturn );
     }
     
     memset( readBuffer, NUL_BYTE, sizeof( readBuffer ) );
   }
   
-  return ( void * )EXIT_SUCCESS;
+  threadReturn = 0;
+  pthread_exit( &threadReturn );
 }
 
 
@@ -164,13 +205,16 @@ static void *socketReader( void *sockReadArg ){
 static void *socketWriter( void *sockWriteArg ){
   
   char *line;
+  int threadReturn = 0;
   size_t len = ( size_t )LINE_BUFFER_SIZE;
   ssize_t bytesRead, bytesWrote;
   
   line = ( char * )malloc( ( size_t )( LINE_BUFFER_SIZE * sizeof( char ) ) );
   if( NULL == line ){
     perror( "malloc" );
-    return ( void * )EXIT_FAILURE;
+    
+    threadReturn = 1;
+    pthread_exit( &threadReturn );
   }
   
   assert( NULL != line );
@@ -200,8 +244,8 @@ static void *socketWriter( void *sockWriteArg ){
   }
 
   free( line );
-  return ( void * )EXIT_SUCCESS;
-  
+  threadReturn = 0;
+  pthread_exit( &threadReturn );
 }
 
 

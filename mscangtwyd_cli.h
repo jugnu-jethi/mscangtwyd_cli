@@ -22,6 +22,8 @@
 #define BUF_SIZE 100
 #define LINE_BUFFER_SIZE ( 16384 )
 #define NUL_BYTE '\0'
+#define TIMEOUT_MIN 1
+#define TIMEOUT_MAX 5
 
 #define PRINT_DEBUG printf
 
